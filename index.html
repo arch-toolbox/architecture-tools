@@ -2,35 +2,132 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <title>建築ツール集（β）</title>
+  <title>建築・住宅業務向け 無料Webツール集（β）</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <style>
-    body { font-family: system-ui, sans-serif; padding: 20px; }
-    h1 { font-size: 24px; }
-    ul { padding-left: 20px; }
-    li { margin-bottom: 10px; }
-    a { color: #0066cc; text-decoration: none; }
-    a:hover { text-decoration: underline; }
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #f5f7fa;
+      color: #333;
+    }
+
+    header {
+      background: linear-gradient(135deg, #1e293b, #334155);
+      color: #fff;
+      padding: 32px 20px;
+      text-align: center;
+    }
+
+    header h1 {
+      margin: 0;
+      font-size: 24px;
+      letter-spacing: 0.05em;
+    }
+
+    header p {
+      margin-top: 8px;
+      font-size: 14px;
+      opacity: 0.9;
+    }
+
+    main {
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 32px 16px 48px;
+    }
+
+    .tool-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 20px;
+    }
+
+    .tool-card {
+      background: #fff;
+      border-radius: 12px;
+      padding: 20px;
+      box-shadow: 0 8px 20px rgba(0,0,0,0.05);
+      transition: transform 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    .tool-card:hover {
+      transform: translateY(-4px);
+      box-shadow: 0 12px 28px rgba(0,0,0,0.1);
+    }
+
+    .tool-card h2 {
+      margin: 0 0 8px;
+      font-size: 18px;
+      color: #1e293b;
+    }
+
+    .tool-card p {
+      font-size: 14px;
+      line-height: 1.6;
+      color: #555;
+      margin-bottom: 16px;
+    }
+
+    .tool-card a {
+      display: inline-block;
+      text-decoration: none;
+      background: #2563eb;
+      color: #fff;
+      padding: 10px 16px;
+      border-radius: 8px;
+      font-size: 14px;
+      transition: background 0.2s ease;
+    }
+
+    .tool-card a:hover {
+      background: #1d4ed8;
+    }
+
+    footer {
+      text-align: center;
+      font-size: 12px;
+      color: #777;
+      border-top: 1px solid #ddd;
+      padding: 20px 10px;
+      background: #fafafa;
+    }
   </style>
 </head>
 <body>
 
-  <h1>建築・住宅業務向け 無料Webツール集（β版）</h1>
+  <header>
+    <h1>建築・住宅業務向け 無料Webツール集（β）</h1>
+    <p>現場・設計・営業のための実務支援ツール</p>
+  </header>
 
-  <ul>
-  <li>
-    <a href="./diff/">図面差分チェッカー（β）</a>
-  </li>
-  <li>
-    <a href="./daylight/">採光計算ツール（β）</a>
-  </li>
-  <li>
-    <a href="./slant/">斜線検討ツール（β）</a>
-  </li>
-</ul>
+  <main>
+    <div class="tool-grid">
 
-  <p style="margin-top:30px; font-size:12px; color:#555;">
-    ※すべて試作版です。動作不良・改善案があればご連絡ください。
-  </p>
+      <div class="tool-card">
+        <h2>図面差分チェッカー</h2>
+        <p>設計変更時の「削除・追加・共通部分」を画像比較で自動判定。変更点の確認作業を高速化します。</p>
+        <a href="./diff/">ツールを開く</a>
+      </div>
+
+      <div class="tool-card">
+        <h2>採光計算ツール</h2>
+        <p>住宅設計に必要な採光計算を、簡単な入力だけで即時チェック。初期プラン検討に最適です。</p>
+        <a href="./daylight/">ツールを開く</a>
+      </div>
+
+      <div class="tool-card">
+        <h2>斜線検討ツール</h2>
+        <p>道路・北側斜線などの簡易チェック用ツール。ボリューム検討時の当たり付けに使えます。</p>
+        <a href="./slant/">ツールを開く</a>
+      </div>
+
+    </div>
+  </main>
+
+  <footer>
+    <p>※ 本サイトのツールは試作版（β）です。計算結果は参考値としてご利用ください。</p>
+  </footer>
 
 </body>
 </html>
