@@ -1,11 +1,632 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
-  <meta charset="UTF-8">
-  <title>採光計算ツール（β）</title>
+<meta charset="UTF-8">
+<title>採光補正係数シミュレーター v7.2</title>
+<style>
+  body { font-family: sans-serif; margin: 1rem; }
+  .row { display:flex; gap:1rem; flex-wrap:wrap; }
+  .panel { border:1px solid #ccc; padding:.5rem; }
+  .canvas-wrap { position:relative; width:560px; height:380px; border:1px solid #888; background:#f8f8f8; }
+  .canvas-wrap canvas { position:absolute; top:0; left:0; width:100%; height:100%; }
+  #log { margin-top:.75rem; white-space:pre-line; font-size:.9rem; }
+  label { font-size:.8rem; }
+</style>
 </head>
 <body>
-  <h1>採光計算ツール（β）</h1>
-  <p>現在調整中です。まもなく実装予定。</p>
+<h1>採光補正係数シミュレーター v7.2</h1>
+
+<!-- ① 用途地域とキャリブ -->
+<div class="panel">
+  <h2>基本設定</h2>
+  <label>用途地域：
+    <select id="zoneSelect">
+      <option value="residential">住居系</option>
+      <option value="commercial">工業系</option>
+      <option value="industrial">商業系</option>
+    </select>
+  </label>
+  <button id="calibBtn">キャリブ（4面共通）</button>
+  <button id="exportAllBtn">📸 結果保存（2画面＋計算値）</button>
+</div>
+
+<!-- ② 4面の画像読み込み -->
+<div class="panel">
+  <h2>4面図読み込み（同一PDFキャプチャ想定）</h2>
+  <label>南面：<input type="file" id="southFile" accept="image/*"></label>
+  <label>東面：<input type="file" id="eastFile" accept="image/*"></label>
+  <label>北面：<input type="file" id="northFile" accept="image/*"></label>
+  <label>西面：<input type="file" id="westFile" accept="image/*"></label>
+  <p style="font-size:.7rem;">※最初に読み込んだ画像の表示倍率を4面で共通使用します</p>
+</div>
+
+<div class="row">
+  <!-- 正面 -->
+  <div class="panel">
+    <h2>正面図</h2>
+    <div style="margin-bottom:.4rem;">
+      <label>表示する図面：
+        <select id="frontViewSelect">
+          <option value="south">南</option>
+          <option value="east">東</option>
+          <option value="north">北</option>
+          <option value="west">西</option>
+        </select>
+      </label>
+      <button id="frontGLBtn">GL設定</button>
+      <button id="frontExportBtn">📸この画面だけ保存</button>
+    </div>
+    <div style="margin-bottom:.4rem;">
+      <label>サッシ幅(mm): <input type="number" id="sashW" value="1600" style="width:5rem;"></label>
+      <label>サッシ高(mm): <input type="number" id="sashH" value="1100" style="width:5rem;"></label>
+    </div>
+    <div class="canvas-wrap" id="frontWrap">
+      <canvas id="frontImg"></canvas>
+      <canvas id="frontDraw"></canvas>
+    </div>
+    <p style="font-size:.7rem;">サッシ：ドラッグで上下左右／トップ：サッシの真上だけ上下</p>
+  </div>
+
+  <!-- 側面 -->
+  <div class="panel">
+    <h2>側面図</h2>
+    <div style="margin-bottom:.4rem;">
+      <label>表示する図面：
+        <select id="sideViewSelect">
+          <option value="east">東</option>
+          <option value="south">南</option>
+          <option value="north">北</option>
+          <option value="west">西</option>
+        </select>
+      </label>
+      <button id="sideGLBtn">GL設定</button>
+      <button id="sideExportBtn">📸この画面だけ保存</button>
+    </div>
+    <div style="margin-bottom:.4rem;">
+      <label>境界距離(mm): <input type="number" id="boundaryInput" value="2000" style="width:5rem;"></label>
+      <span style="font-size:.7rem;">※表示は距離−90mm</span>
+    </div>
+    <div class="canvas-wrap" id="sideWrap">
+      <canvas id="sideImg"></canvas>
+      <canvas id="sideDraw"></canvas>
+    </div>
+    <p style="font-size:.7rem;">側面：サッシ・トップ・境界を左右ドラッグ／斜線は常時表示</p>
+  </div>
+</div>
+
+<div id="log"></div>
+
+<script>
+/* ==== 共通状態 ==== */
+const images = {south:null, east:null, north:null, west:null};
+/* キャンバス高さ380で下40px余白を残すGL位置 */
+const GLmap  = {south:340, east:340, north:340, west:340};
+const glOffsetMap = {south:0, east:0, north:0, west:0};
+let scale = 1;
+let mode  = "normal";
+
+/* ==== キャンバス ==== */
+const frontImgCv  = document.getElementById('frontImg');
+const frontDrawCv = document.getElementById('frontDraw');
+const sideImgCv   = document.getElementById('sideImg');
+const sideDrawCv  = document.getElementById('sideDraw');
+const frontImgCtx  = frontImgCv.getContext('2d');
+const frontDrawCtx = frontDrawCv.getContext('2d');
+const sideImgCtx   = sideImgCv.getContext('2d');
+const sideDrawCtx  = sideDrawCv.getContext('2d');
+
+(function initCanvas(){
+  const fw=document.getElementById('frontWrap');
+  frontImgCv.width = frontDrawCv.width = fw.clientWidth;
+  frontImgCv.height= frontDrawCv.height= fw.clientHeight;
+  const sw=document.getElementById('sideWrap');
+  sideImgCv.width  = sideDrawCv.width  = sw.clientWidth;
+  sideImgCv.height = sideDrawCv.height = sw.clientHeight;
+})();
+
+/* ==== UI ==== */
+const frontViewSelect = document.getElementById('frontViewSelect');
+const sideViewSelect  = document.getElementById('sideViewSelect');
+const sashWInput      = document.getElementById('sashW');
+const sashHInput      = document.getElementById('sashH');
+const boundaryInput   = document.getElementById('boundaryInput');
+const zoneSelect      = document.getElementById('zoneSelect');
+const logEl           = document.getElementById('log');
+
+/* ==== 図面上の点 ==== */
+let frontSash = {x:200, y:250};
+let frontTop  = {x:200, y:150};
+let sideSash  = {x:220, y:250};
+let sideTop   = {x:350, y:150};
+let sideBoundaryX = 420;
+let boundarySide  = 'right';
+
+/* ==== ドラッグ ==== */
+let frontDragTarget = null;
+let frontDragOffset = {x:0,y:0};
+let sideDragTarget  = null;
+let sideDragOffset  = {x:0,y:0};
+
+/* ==== キャリブ用 ==== */
+let calibPts = [];
+
+/* ==== 画像表示の共通基準 ==== */
+let baseImageWidth  = null;
+let baseImageHeight = null;
+let baseDisplayScale = null;
+
+/* ==== 計算結果 ==== */
+let lastCalc = {
+  verticalMm: 0,
+  horizontalMm: 0,
+  slope: 0,
+  coef: 0,
+  area: 0,
+  zoneText: ''
+};
+
+/* ==== ログ ==== */
+function log(msg){ logEl.textContent = msg; }
+
+/* ==== 用途地域 ==== */
+function getZoneParams(){
+  const z = zoneSelect.value;
+  if (z === 'residential') return {m:6, b:1.4, label:'住居系'};
+  if (z === 'commercial')  return {m:8, b:1,   label:'工業系'};
+  return {m:10, b:1,       label:'商業系'};
+}
+
+/* ==== 画像表示（GLオフセット + 上下制限はGL設定時に適用） ==== */
+function drawImageUniform(ctx, img, canvas, view){
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  if (!img) return;
+  if (baseImageWidth === null){
+    baseImageWidth  = img.width;
+    baseImageHeight = img.height;
+    baseDisplayScale = canvas.height / img.height;
+  }
+  const drawW = img.width * baseDisplayScale;
+  const drawH = img.height * baseDisplayScale;
+  const offsetX = (canvas.width - drawW)/2;
+  let offsetY = (canvas.height - drawH)/2 + (glOffsetMap[view] || 0);
+  ctx.drawImage(img, offsetX, offsetY, drawW, drawH);
+}
+
+/* ==== 正面描画 ==== */
+function redrawFront(){
+  const view = frontViewSelect.value;
+  drawImageUniform(frontImgCtx, images[view], frontImgCv, view);
+  frontDrawCtx.clearRect(0,0,frontDrawCv.width,frontDrawCv.height);
+
+  // GLライン
+  const fGL = GLmap[view];
+  frontDrawCtx.setLineDash([4,2]);
+  frontDrawCtx.strokeStyle='blue';
+  frontDrawCtx.beginPath();
+  frontDrawCtx.moveTo(0, fGL);
+  frontDrawCtx.lineTo(frontDrawCv.width, fGL);
+  frontDrawCtx.stroke();
+  frontDrawCtx.setLineDash([]);
+
+  // サッシ枠（表示用セーフティ：大きすぎるときは縮めて表示）
+  let wpx = (Number(sashWInput.value)||0)/scale;
+  let hpx = (Number(sashHInput.value)||0)/scale;
+  const maxW = frontDrawCv.width * 0.8;
+  const maxH = frontDrawCv.height * 0.8;
+  if (wpx > maxW) wpx = maxW;
+  if (hpx > maxH) hpx = maxH;
+  frontDrawCtx.strokeStyle='red';
+  frontDrawCtx.strokeRect(frontSash.x-wpx/2, frontSash.y-hpx/2, wpx, hpx);
+
+  // サッシ中心点
+  frontDrawCtx.fillStyle='red';
+  frontDrawCtx.beginPath(); frontDrawCtx.arc(frontSash.x,frontSash.y,4,0,Math.PI*2); frontDrawCtx.fill();
+
+  // サッシ中心高さの水平線（補助）
+  frontDrawCtx.setLineDash([2,2]);
+  frontDrawCtx.strokeStyle='rgba(0,0,0,0.35)';
+  frontDrawCtx.beginPath();
+  frontDrawCtx.moveTo(0, frontSash.y);
+  frontDrawCtx.lineTo(frontDrawCv.width, frontSash.y);
+  frontDrawCtx.stroke();
+  frontDrawCtx.setLineDash([]);
+
+  // トップ点
+  frontDrawCtx.fillStyle='purple';
+  frontDrawCtx.beginPath(); frontDrawCtx.arc(frontTop.x,frontTop.y,4,0,Math.PI*2); frontDrawCtx.fill();
+
+  // トップ高さの水平線（補助線）
+  frontDrawCtx.setLineDash([2,2]);
+  frontDrawCtx.strokeStyle='rgba(128,0,128,0.35)';
+  frontDrawCtx.beginPath();
+  frontDrawCtx.moveTo(0, frontTop.y);
+  frontDrawCtx.lineTo(frontDrawCv.width, frontTop.y);
+  frontDrawCtx.stroke();
+  frontDrawCtx.setLineDash([]);
+
+}
+
+/* ==== 側面描画 ==== */
+function redrawSide(){
+  const view = sideViewSelect.value;
+  drawImageUniform(sideImgCtx, images[view], sideImgCv, view);
+  sideDrawCtx.clearRect(0,0,sideDrawCv.width,sideDrawCv.height);
+
+  // GL
+  const sGL = GLmap[view];
+  sideDrawCtx.setLineDash([4,2]);
+  sideDrawCtx.strokeStyle='blue';
+  sideDrawCtx.beginPath();
+  sideDrawCtx.moveTo(0, sGL);
+  sideDrawCtx.lineTo(sideDrawCv.width, sGL);
+  sideDrawCtx.stroke();
+  sideDrawCtx.setLineDash([]);
+
+  // サッシ点
+  sideDrawCtx.fillStyle='red';
+  sideDrawCtx.beginPath(); sideDrawCtx.arc(sideSash.x,sideSash.y,4,0,Math.PI*2); sideDrawCtx.fill();
+  sideDrawCtx.setLineDash([2,2]); sideDrawCtx.strokeStyle='rgba(0,0,0,0.3)';
+  sideDrawCtx.beginPath(); sideDrawCtx.moveTo(0,sideSash.y); sideDrawCtx.lineTo(sideDrawCv.width,sideSash.y); sideDrawCtx.stroke(); sideDrawCtx.setLineDash([]);
+
+  // 境界線
+  sideDrawCtx.setLineDash([4,2]); sideDrawCtx.strokeStyle='black';
+  sideDrawCtx.beginPath(); sideDrawCtx.moveTo(sideBoundaryX,0); sideDrawCtx.lineTo(sideBoundaryX,sideDrawCv.height); sideDrawCtx.stroke(); sideDrawCtx.setLineDash([]);
+
+  // トップ点
+  sideDrawCtx.fillStyle='purple';
+  sideDrawCtx.beginPath(); sideDrawCtx.arc(sideTop.x,sideTop.y,4,0,Math.PI*2); sideDrawCtx.fill();
+  sideDrawCtx.setLineDash([2,2]); sideDrawCtx.strokeStyle='rgba(0,0,0,0.3)';
+  sideDrawCtx.beginPath(); sideDrawCtx.moveTo(0,sideTop.y); sideDrawCtx.lineTo(sideDrawCv.width,sideTop.y); sideDrawCtx.stroke(); sideDrawCtx.setLineDash([]);
+
+  // 採光補正係数の仮想傾き（常時）
+  drawCoefficientLines();
+}
+
+/* ==== 側面の係数線（0,1,2,3） ==== */
+function drawCoefficientLines(){
+  const originX = sideBoundaryX;
+  const originY = sideSash.y;
+  const isRight = (sideSash.x >= sideBoundaryX);
+  const {m,b} = getZoneParams();
+  const maxRun=1200;
+  [0,1,2,3].forEach(k=>{
+    const depthPerHeight = (k+b)/m;
+    if (depthPerHeight <= 0) return;
+    const run = (isRight?1:-1)*maxRun;
+    const height = Math.abs(run)/depthPerHeight;
+    const color = (k===0?'gray':k===1?'green':k===2?'blue':'red');
+    sideDrawCtx.strokeStyle=color;
+    sideDrawCtx.beginPath();
+    sideDrawCtx.moveTo(originX,originY);
+    sideDrawCtx.lineTo(originX+run,originY-height);
+    sideDrawCtx.stroke();
+    sideDrawCtx.fillStyle=color;
+    sideDrawCtx.font='10px sans-serif';
+    sideDrawCtx.fillText(`係数${k}`, originX+run*0.4, originY-height-5);
+  });
+}
+
+/* ==== 4面画像の取り込み ==== */
+function loadImageTo(view, fileEl){
+  const f = fileEl.files[0]; if(!f) return;
+  const r = new FileReader();
+  r.onload = ev=>{
+    const img = new Image();
+    img.onload = ()=>{
+      images[view]=img;
+      redrawFront();
+      redrawSide();
+    };
+    img.src = ev.target.result;
+  };
+  r.readAsDataURL(f);
+}
+document.getElementById('southFile').addEventListener('change', e=>loadImageTo('south', e.target));
+document.getElementById('eastFile').addEventListener('change',  e=>loadImageTo('east', e.target));
+document.getElementById('northFile').addEventListener('change', e=>loadImageTo('north', e.target));
+document.getElementById('westFile').addEventListener('change',  e=>loadImageTo('west', e.target));
+
+/* ==== キャリブ ==== */
+document.getElementById('calibBtn').addEventListener('click', ()=>{
+  mode='calib';
+  calibPts=[];
+  log('キャリブ中：どちらかの図面で2点クリック→距離(mm)を入力（4面共通）');
+});
+
+/* ==== GLボタン ==== */
+document.getElementById('frontGLBtn').addEventListener('click', ()=>{
+  mode='frontGL';
+  log('正面図のGLがある位置をクリック（画像を上下に寄せます）');
+});
+document.getElementById('sideGLBtn').addEventListener('click', ()=>{
+  mode='sideGL';
+  log('側面図のGLがある位置をクリック（画像を上下に寄せます）');
+});
+
+/* ==== GLオフセットの安全適用 ==== */
+function applyGLOffset(view, diff, canvasHeight){
+  const margin = 40;
+  const minOffset = - (canvasHeight/2 - margin);
+  const maxOffset =   (canvasHeight/2 - margin);
+  let next = (glOffsetMap[view] || 0) + diff;
+  if (next < minOffset) next = minOffset;
+  if (next > maxOffset) next = maxOffset;
+  glOffsetMap[view] = next;
+}
+
+/* ==== 正面操作 ==== */
+frontDrawCv.addEventListener('mousedown', e=>{
+  const p={x:e.offsetX,y:e.offsetY};
+
+  // キャリブ
+  if (mode === 'calib'){
+    calibPts.push(p);
+    if (calibPts.length===2){
+      const d=Math.hypot(calibPts[1].x-calibPts[0].x, calibPts[1].y-calibPts[0].y);
+      const real=prompt('この距離(mm)?','1000');
+      if (real && !isNaN(real)){
+        scale = Number(real)/d;
+        log(`キャリブ完了：1px = ${scale.toFixed(3)} mm（4面共通）`);
+      } else {
+        log('キャリブをキャンセルしました');
+      }
+      mode='normal';
+      placeBoundaryFromInput();
+      redrawFront(); redrawSide(); calcCoefficient();
+    }
+    return;
+  }
+
+  // GL（画像を寄せる）
+  if (mode === 'frontGL'){
+    const view = frontViewSelect.value;
+    const targetGL = GLmap[view];
+    const diff = targetGL - p.y;
+    applyGLOffset(view, diff, frontImgCv.height);
+    mode='normal';
+    redrawFront();
+    return;
+  }
+
+  // ① まずトップ点を優先してドラッグ判定（サッシが大きくても触れるように）
+  if (Math.hypot(p.x-frontTop.x,p.y-frontTop.y) < 10){
+    frontDragTarget='top';
+    frontDragOffset={y:p.y-frontTop.y};
+    return;
+  }
+
+  // ② 次にサッシ枠
+  const wpx=(Number(sashWInput.value)||0)/scale;
+  const hpx=(Number(sashHInput.value)||0)/scale;
+  if (p.x>=frontSash.x-wpx/2 && p.x<=frontSash.x+wpx/2 &&
+      p.y>=frontSash.y-hpx/2 && p.y<=frontSash.y+hpx/2){
+    frontDragTarget='sash';
+    frontDragOffset={x:p.x-frontSash.x,y:p.y-frontSash.y};
+    return;
+  }
+});
+frontDrawCv.addEventListener('mousemove', e=>{
+  if (!frontDragTarget) return;
+  const p={x:e.offsetX,y:e.offsetY};
+  if (frontDragTarget==='sash'){
+    frontSash.x = p.x - frontDragOffset.x;
+    frontSash.y = p.y - frontDragOffset.y;
+  } else if (frontDragTarget==='top'){
+    frontTop.y = p.y - frontDragOffset.y;
+    frontTop.x = frontSash.x;
+  }
+  redrawFront();
+  syncFrontToSide();
+});
+window.addEventListener('mouseup', ()=>{ frontDragTarget=null; sideDragTarget=null; });
+
+/* ==== 側面操作 ==== */
+sideDrawCv.addEventListener('mousedown', e=>{
+  const p={x:e.offsetX,y:e.offsetY};
+
+  // キャリブ
+  if (mode === 'calib'){
+    calibPts.push(p);
+    if (calibPts.length===2){
+      const d=Math.hypot(calibPts[1].x-calibPts[0].x, calibPts[1].y-calibPts[0].y);
+      const real=prompt('この距離(mm)?','1000');
+      if (real && !isNaN(real)){
+        scale=Number(real)/d;
+        log(`キャリブ完了：1px = ${scale.toFixed(3)} mm（4面共通）`);
+      } else {
+        log('キャリブをキャンセルしました');
+      }
+      mode='normal';
+      placeBoundaryFromInput();
+      redrawFront(); redrawSide(); calcCoefficient();
+    }
+    return;
+  }
+
+  // 側面のGL
+  if (mode === 'sideGL'){
+    const view = sideViewSelect.value;
+    const targetGL = GLmap[view];
+    const diff = targetGL - p.y;
+    applyGLOffset(view, diff, sideImgCv.height);
+    mode='normal';
+    redrawSide();
+    return;
+  }
+
+  // トップを先に判定
+  if (Math.hypot(p.x-sideTop.x,p.y-sideTop.y)<10){
+    sideDragTarget='top';
+    sideDragOffset={x:p.x-sideTop.x};
+    return;
+  }
+
+  // サッシ点
+  if (Math.hypot(p.x-sideSash.x,p.y-sideSash.y)<10){
+    sideDragTarget='sash';
+    sideDragOffset={x:p.x-sideSash.x};
+    return;
+  }
+
+  // 境界
+  if (Math.abs(p.x-sideBoundaryX)<8 && Math.abs(p.y-sideSash.y)<20){
+    sideDragTarget='boundary';
+    sideDragOffset={x:p.x-sideBoundaryX};
+    return;
+  }
+});
+sideDrawCv.addEventListener('mousemove', e=>{
+  if (!sideDragTarget) return;
+  const p={x:e.offsetX,y:e.offsetY};
+  if (sideDragTarget==='sash'){
+    sideSash.x = p.x - sideDragOffset.x;
+  } else if (sideDragTarget==='top'){
+    sideTop.x = p.x - sideDragOffset.x;
+  } else if (sideDragTarget==='boundary'){
+    sideBoundaryX = p.x - sideDragOffset.x;
+    if (scale){
+      const distMm = Math.abs(sideBoundaryX - sideSash.x) * scale + 90;
+      boundaryInput.value = Math.round(distMm);
+      boundarySide = (sideBoundaryX >= sideSash.x)?'right':'left';
+    }
+  }
+  redrawSide();
+  calcCoefficient();
+});
+
+/* ==== 境界入力を側面に反映 ==== */
+function placeBoundaryFromInput(){
+  if (!scale) return;
+  let distMm = Number(boundaryInput.value)||0;
+  let adjMm = distMm - 90;
+  if (adjMm < 0) adjMm = 0;
+  const adjPx = adjMm / scale;
+  if (boundarySide === 'right'){
+    sideBoundaryX = sideSash.x + adjPx;
+  } else {
+    sideBoundaryX = sideSash.x - adjPx;
+  }
+}
+boundaryInput.addEventListener('input', ()=>{
+  placeBoundaryFromInput();
+  redrawSide();
+  calcCoefficient();
+});
+
+/* ==== 面切替 ==== */
+frontViewSelect.addEventListener('change', ()=>{
+  redrawFront();
+  syncFrontToSide();
+});
+sideViewSelect.addEventListener('change', ()=>{
+  redrawSide();
+  syncFrontToSide();
+});
+
+/* ==== 正面→側面 高さ連動 ==== */
+function syncFrontToSide(){
+  const fView = frontViewSelect.value;
+  const sView = sideViewSelect.value;
+  const fGL   = GLmap[fView];
+  const sGL   = GLmap[sView];
+
+  const sashMm = (fGL - frontSash.y) * scale;
+  sideSash.y   = sGL - sashMm / scale;
+
+  const topMm  = (fGL - frontTop.y) * scale;
+  sideTop.y    = sGL - topMm / scale;
+
+  placeBoundaryFromInput();
+  redrawSide();
+  calcCoefficient();
+}
+
+/* ==== 採光計算 ==== */
+function calcCoefficient(){
+  const verticalPx = frontSash.y - frontTop.y;
+  if (verticalPx <= 0){
+    log('トップがサッシより下にあります');
+    return;
+  }
+  const verticalMm = verticalPx * scale;
+  const horizontalPx = Math.abs(sideTop.x - sideBoundaryX);
+  const horizontalMm = horizontalPx * scale;
+
+  const {m,b,label} = getZoneParams();
+  const slope = horizontalMm / verticalMm;
+  let coef = slope * m - b;
+  if (coef < 0) coef = 0;
+  if (coef > 3) coef = 3;
+
+  const sashWmm = Number(sashWInput.value)||0;
+  const sashHmm = Number(sashHInput.value)||0;
+  const area = sashWmm * sashHmm * coef / 1_000_000;
+
+  lastCalc = {verticalMm, horizontalMm, slope, coef, area, zoneText: label};
+
+  log(
+    `高さ(正面) = ${verticalMm.toFixed(1)} mm\n`+
+    `奥行(側面) = ${horizontalMm.toFixed(1)} mm\n`+
+    `傾き(奥行/高さ) = ${slope.toFixed(3)}\n`+
+    `用途地域 = ${label}\n`+
+    `採光補正係数 = ${coef.toFixed(2)}\n`+
+    `有効採光面積 = ${area.toFixed(3)} m²`
+  );
+}
+
+/* ==== 個別画面PNG ==== */
+function exportCanvasPair(imgCv, drawCv, filename){
+  const exp = document.createElement('canvas');
+  exp.width  = imgCv.width;
+  exp.height = imgCv.height;
+  const c = exp.getContext('2d');
+  c.drawImage(imgCv,0,0);
+  c.drawImage(drawCv,0,0);
+  const a = document.createElement('a');
+  a.download = filename;
+  a.href = exp.toDataURL('image/png');
+  a.click();
+}
+document.getElementById('frontExportBtn').addEventListener('click', ()=>{
+  exportCanvasPair(frontImgCv, frontDrawCv, `front_${frontViewSelect.value}.png`);
+});
+document.getElementById('sideExportBtn').addEventListener('click', ()=>{
+  exportCanvasPair(sideImgCv, sideDrawCv, `side_${sideViewSelect.value}.png`);
+});
+
+/* ==== 2画面＋計算値を横並び保存 ==== */
+document.getElementById('exportAllBtn').addEventListener('click', ()=>{
+  const exp = document.createElement('canvas');
+  exp.width  = frontImgCv.width + sideImgCv.width;
+  exp.height = Math.max(frontImgCv.height, sideImgCv.height) + 100;
+  const ctx = exp.getContext('2d');
+
+  ctx.drawImage(frontImgCv,0,0);
+  ctx.drawImage(frontDrawCv,0,0);
+  ctx.drawImage(sideImgCv,frontImgCv.width,0);
+  ctx.drawImage(sideDrawCv,frontImgCv.width,0);
+
+  ctx.fillStyle='white';
+  ctx.fillRect(0, exp.height-100, exp.width, 100);
+  ctx.fillStyle='black';
+  ctx.font='14px sans-serif';
+  const t1 = `高さ=${lastCalc.verticalMm.toFixed(1)}mm / 奥行=${lastCalc.horizontalMm.toFixed(1)}mm / 傾き=${lastCalc.slope.toFixed(3)}`;
+  const t2 = `用途=${lastCalc.zoneText} / 採光補正係数=${lastCalc.coef.toFixed(2)} / 有効採光面積=${lastCalc.area.toFixed(3)}m²`;
+  ctx.fillText(t1, 10, exp.height-70);
+  ctx.fillText(t2, 10, exp.height-45);
+
+  const now=new Date();
+  const fname=`result_${now.getFullYear()}${('0'+(now.getMonth()+1)).slice(-2)}${('0'+now.getDate()).slice(-2)}_${('0'+now.getHours()).slice(-2)}${('0'+now.getMinutes()).slice(-2)}${('0'+now.getSeconds()).slice(-2)}.png`;
+  const a=document.createElement('a');
+  a.download=fname;
+  a.href=exp.toDataURL('image/png');
+  a.click();
+});
+
+/* ==== 初期描画 ==== */
+redrawFront();
+redrawSide();
+calcCoefficient();
+</script>
 </body>
 </html>
