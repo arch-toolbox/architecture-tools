@@ -88,7 +88,10 @@
   </div>
 
 <script>
-(function(){
+(function () {
+  // ★ここを自分の Worker の URL に書き換える
+  const SLANT_WORKER_URL = "https://weathered-pine-7fbe.1989yo55.workers.dev/";
+
   // ----- elements -----
   const stage = document.getElementById('stage');
   const bg = document.getElementById('bg');
@@ -108,13 +111,13 @@
   const panelsRoot = document.getElementById('slant-panels');
 
   // ----- state -----
-  let currentBlobURL = null; // メモリリーク対策：現在のObjectURLを保持
-  
+  let currentBlobURL = null; // 画像URL解放用
+
   const state = {
     canvas: { w: 1000, h: 720 },
     ppm: 100,
     origin: { x: 150, y: 600 },
-    opacity: .85,
+    opacity: 0.85,
     calibMode: false,
     calibPts: [],
     slants: [
@@ -124,21 +127,12 @@
     ],
   };
 
-  // ----- helpers -----
+  // ----- helpers（UI側だけで使う軽めの計算） -----
   function slopeFromDeg(deg){ return Math.tan(deg*Math.PI/180); }
   function degFromSlope(m){ return Math.atan(m)*180/Math.PI; }
   function clamp(v, a, b){ return Math.max(a, Math.min(b, v)); }
-  function azimuthCorrectedSlope(m, phiDeg){
-    const c = Math.cos(phiDeg*Math.PI/180);
-    const k = 1/Math.max(1e-6, c);
-    return m * k; // m' = m / cos φ
-  }
-  function polar(cx,cy,r,deg){
-    const rad = deg*Math.PI/180;
-    return { x: cx + r*Math.cos(rad), y: cy - r*Math.sin(rad) };
-  }
 
-  // Build control panels
+  // ----- control panels -----
   function renderPanels(){
     panelsRoot.innerHTML = "";
     state.slants.forEach((s)=>{
@@ -194,8 +188,12 @@
         }else if(t.tagName==="SELECT"){
           s[k] = t.value;
           if(k==="mode"){
-            if(s.mode==="slope"){ s.m = slopeFromDeg(s.theta||degFromSlope(s.m)); }
-            else{ s.theta = degFromSlope(s.m); }
+            // モード切り替え時の m / θ の相互変換
+            if(s.mode==="slope"){ 
+              s.m     = slopeFromDeg(s.theta || degFromSlope(s.m)); 
+            }else{ 
+              s.theta = degFromSlope(s.m); 
+            }
           }
         }else{
           const val = parseFloat(t.value);
@@ -203,12 +201,13 @@
           else if(k==="theta"){ s.theta = val; }
           else if(k==="h0"||k==="d0"||k==="phi"){ s[k]=val; }
         }
-        renderPanels(); // re-render to swap m/θ input
+        renderPanels(); // 入力UIを再構築
         draw();
       }, false);
     });
   }
 
+  // ----- grid / axes -----
   function drawGrid(){
     const ppm = state.ppm;
     grid.innerHTML = "";
@@ -242,69 +241,79 @@
     axes.appendChild(axY);
   }
 
-  function buildSlant(s){
-    // 実効勾配 m' と角度 θ（水平基準）
-    let theta, mEff;
-    if(s.mode==="slope"){
-      mEff = azimuthCorrectedSlope(s.m, s.phi);
-      theta = degFromSlope(mEff);
-    }else{
-      theta = s.theta;
-      mEff = Math.tan(theta*Math.PI/180);
+  // ----- Worker 呼び出しで斜線ジオメトリを取得 -----
+  let slantRequestId = 0;
+
+  async function updateSlantsFromWorker(){
+    const myId = ++slantRequestId;
+    try{
+      const payload = {
+        canvas: state.canvas,
+        ppm: state.ppm,
+        origin: state.origin,
+        slants: state.slants
+      };
+      const res = await fetch(SLANT_WORKER_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      if(!res.ok){
+        console.error("斜線Workerエラー:", res.status);
+        return;
+      }
+      const data = await res.json();
+      if(myId !== slantRequestId) return; // 古いレスポンスは破棄
+
+      slines.innerHTML = "";
+      (data.slants || []).forEach(s => {
+        // 斜線本体
+        const line = document.createElementNS("http://www.w3.org/2000/svg","line");
+        line.setAttribute("x1", s.x0);
+        line.setAttribute("y1", s.y0);
+        line.setAttribute("x2", s.x1);
+        line.setAttribute("y2", s.y1);
+        line.setAttribute("stroke", s.color);
+        line.setAttribute("stroke-width", 2);
+        slines.appendChild(line);
+
+        // 角度弧
+        if (s.arcPath) {
+          const path = document.createElementNS("http://www.w3.org/2000/svg","path");
+          path.setAttribute("d", s.arcPath);
+          path.setAttribute("fill", "none");
+          path.setAttribute("stroke", s.color);
+          path.setAttribute("stroke-width", "1.5");
+          slines.appendChild(path);
+        }
+
+        // 起点ドット
+        if (s.dot) {
+          const dot = document.createElementNS("http://www.w3.org/2000/svg","circle");
+          dot.setAttribute("cx", s.dot.cx);
+          dot.setAttribute("cy", s.dot.cy);
+          dot.setAttribute("r", s.dot.r || 3);
+          dot.setAttribute("fill", s.color);
+          slines.appendChild(dot);
+        }
+
+        // ラベル
+        if (s.label) {
+          const txt = document.createElementNS("http://www.w3.org/2000/svg","text");
+          txt.setAttribute("x", s.label.x);
+          txt.setAttribute("y", s.label.y);
+          txt.setAttribute("font-size","12");
+          txt.setAttribute("fill", s.color);
+          txt.textContent = s.label.text;
+          slines.appendChild(txt);
+        }
+      });
+    }catch(err){
+      console.error("斜線Worker通信エラー:", err);
     }
-
-    // 方向：右上既定、反転で左上
-    let finalDeg = s.flip ? (180 - theta) : theta;
-
-    const ppm = state.ppm;
-    const x0 = state.origin.x + s.d0*ppm; // 水平オフセット[m]→px
-    const y0 = state.origin.y - s.h0*ppm; // 高さ[m]→px（上がマイナスなので引く）
-
-    const L = Math.hypot(state.canvas.w, state.canvas.h) * 1.2;
-    const x1 = x0 + L*Math.cos(finalDeg*Math.PI/180);
-    const y1 = y0 - L*Math.sin(finalDeg*Math.PI/180);
-
-    return {x0,y0,x1,y1,theta,mEff,finalDeg};
   }
 
-  function drawSlants(){
-    slines.innerHTML = "";
-    state.slants.filter(s=>s.enabled).forEach(s=>{
-      const {x0,y0,x1,y1,theta,mEff,finalDeg} = buildSlant(s);
-
-      // 線
-      const line = document.createElementNS("http://www.w3.org/2000/svg","line");
-      line.setAttribute("x1", x0); line.setAttribute("y1", y0);
-      line.setAttribute("x2", x1); line.setAttribute("y2", y1);
-      line.setAttribute("stroke", s.color); line.setAttribute("stroke-width", 2);
-      slines.appendChild(line);
-
-      // 角度弧（水平→finalDeg）
-      // 反転時は180°から、通常時は0°から描画
-      const r = 46;
-      const startDeg = s.flip ? 180 : 0;
-      const a = polar(x0,y0,r, startDeg);
-      const b = polar(x0,y0,r, finalDeg);
-      const large = (Math.abs(finalDeg - startDeg) % 360) > 180 ? 1 : 0;
-      const path = document.createElementNS("http://www.w3.org/2000/svg","path");
-      path.setAttribute("d", `M ${a.x} ${a.y} A ${r} ${r} 0 ${large} ${s.flip?1:0} ${b.x} ${b.y}`);
-      path.setAttribute("fill","none"); path.setAttribute("stroke", s.color); path.setAttribute("stroke-width","1.5");
-      slines.appendChild(path);
-
-      // 起点ドット
-      const dot = document.createElementNS("http://www.w3.org/2000/svg","circle");
-      dot.setAttribute("cx", x0); dot.setAttribute("cy", y0); dot.setAttribute("r", 3);
-      dot.setAttribute("fill", s.color); slines.appendChild(dot);
-
-      // ラベル
-      const txt = document.createElementNS("http://www.w3.org/2000/svg","text");
-      txt.setAttribute("x", x0 + 8); txt.setAttribute("y", y0 - 8);
-      txt.setAttribute("font-size","12"); txt.setAttribute("fill", s.color);
-      txt.textContent = `${s.label}  θ=${theta.toFixed(1)}°  m'=${(mEff).toFixed(2)}  (m=${s.m.toFixed(2)} φ=${(s.phi||0).toFixed(0)}°)  h0=${s.h0}m  d0=${s.d0}m  ${s.flip?"[反転]":""}`;
-      slines.appendChild(txt);
-    });
-  }
-
+  // ----- 全体描画 -----
   function draw(){
     bg.style.opacity = state.opacity.toString();
     originEl.style.left = state.origin.x + "px";
@@ -313,35 +322,29 @@
     originLabel.style.top = state.origin.y + "px";
     statusEl.textContent = `PPM=${state.ppm} px/m, 原点=(${state.origin.x.toFixed(0)}, ${state.origin.y.toFixed(0)})`;
     drawGrid();
-    drawSlants();
+    updateSlantsFromWorker(); // 斜線本体は Worker に計算させる
   }
 
-  // ----- events -----
+  // ----- 画像読み込み -----
   imgInput.addEventListener('change', ()=>{
     const file = imgInput.files && imgInput.files[0];
     if(!file) return;
-    
-    // ファイルサイズ制限（10MB）
-    const maxSize = 10 * 1024 * 1024; // 10MB
+
+    const maxSize = 10 * 1024 * 1024;
     if(file.size > maxSize){
-      alert(`ファイルサイズが大きすぎます。\n最大サイズ: 10MB\n選択されたファイル: ${(file.size / 1024 / 1024).toFixed(2)}MB`);
-      imgInput.value = ''; // 入力をクリア
+      alert(`ファイルサイズが大きすぎます。\n最大サイズ: 10MB\n選択されたファイル: ${(file.size/1024/1024).toFixed(2)}MB`);
+      imgInput.value = '';
       return;
     }
-    
-    // MIMEタイプの検証
     if(!['image/png', 'image/jpeg', 'image/jpg'].includes(file.type)){
       alert('PNG または JPEG 形式の画像のみ対応しています。');
-      imgInput.value = ''; // 入力をクリア
+      imgInput.value = '';
       return;
     }
-    
-    // 既存のObjectURLを解放（メモリリーク対策）
+
     if(currentBlobURL){
       URL.revokeObjectURL(currentBlobURL);
     }
-    
-    // 新しいObjectURLを作成
     currentBlobURL = URL.createObjectURL(file);
     bg.src = currentBlobURL;
   });
@@ -359,17 +362,16 @@
   });
 
   resetBtn.addEventListener('click', ()=>{
-    // 既存のObjectURLを解放
     if(currentBlobURL){
       URL.revokeObjectURL(currentBlobURL);
       currentBlobURL = null;
     }
     bg.src = '';
     imgInput.value = '';
-    
+
     state.origin = {x:150, y:600};
     state.ppm = 100; ppmInput.value = 100;
-    state.opacity = .85; opacityInput.value = .85;
+    state.opacity = 0.85; opacityInput.value = 0.85;
     state.calibMode = false; state.calibPts = [];
     state.slants = [
       { id:"road",   label:"道路斜線", type:"road",   enabled:true,  mode:"slope", h0:1.2, m:1.25, theta:degFromSlope(1.25), d0:0, phi:0,   flip:false, color:"#2563eb" },
@@ -380,7 +382,7 @@
     draw();
   });
 
-  // ドラッグで原点移動 / 縮尺キャリブレーション
+  // ----- 原点ドラッグ & 縮尺キャリブレーション -----
   let dragging = false;
   stage.addEventListener('mousedown', (e)=>{
     const rect = stage.getBoundingClientRect();
@@ -427,12 +429,13 @@
     calibBtn.textContent = state.calibMode ? "キャリブ中…（ステージ上を2点クリック）" : "縮尺キャリブレーション";
   });
 
-  // PNG保存（1000x720固定）
+  // ----- PNG保存 -----
   function downloadURI(uri, name){
     const a = document.createElement('a');
     a.download = name; a.href = uri; document.body.appendChild(a);
     a.click(); a.remove();
   }
+
   saveBtn.addEventListener('click', async ()=>{
     try{
       const canvas = document.createElement('canvas');
@@ -453,7 +456,7 @@
             ctx.globalAlpha = 1;
             res();
           };
-          img.onerror = (e)=>{ rej(new Error('背景画像の読み込みに失敗しました。')); };
+          img.onerror = ()=>{ rej(new Error('背景画像の読み込みに失敗しました。')); };
           img.src = bg.src;
         });
       }
@@ -464,7 +467,7 @@
       await new Promise((res, rej)=>{
         const img = new Image();
         img.onload = ()=>{ ctx.drawImage(img,0,0); URL.revokeObjectURL(url); res(); };
-        img.onerror = (e)=>{ URL.revokeObjectURL(url); rej(new Error('SVGオーバーレイの描画に失敗しました。')); };
+        img.onerror = ()=>{ URL.revokeObjectURL(url); rej(new Error('SVGオーバーレイの描画に失敗しました。')); };
         img.src = url;
       });
 
@@ -475,7 +478,7 @@
     }
   });
 
-  // 初期描画
+  // ----- 初期化 -----
   function init(){
     overlay.setAttribute("viewBox", `0 0 ${state.canvas.w} ${state.canvas.h}`);
     originEl.style.left = state.origin.x + "px";
@@ -488,6 +491,7 @@
   init();
 })();
 </script>
+
 
 </body>
 </html>
