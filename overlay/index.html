@@ -1,1 +1,1070 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>図面オーバーレイツール</title>
+<style>
+html, body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden; /* 画面自体はスクロールさせず、ツールバーだけスクロール */
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: #eee;
+}
 
+/* ===== 左固定・縦ツールバー本体 ===== */
+.toolbar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 260px;
+  height: 100vh;
+  background: #1e293b;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  color: #fff;
+  overflow-y: auto;   /* 中身だけ縦スクロール */
+  z-index: 10;
+  box-shadow: 2px 0 8px rgba(0,0,0,0.4);
+}
+
+/* ===== A / B / 共通 各ブロック ===== */
+.tool-group {
+  background: #0f172a;
+  border-radius: 10px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+}
+
+/* ===== 見出し ===== */
+.tool-title {
+  font-size: 13px;
+  font-weight: bold;
+  color: #38bdf8;
+  border-bottom: 1px solid #334155;
+  padding-bottom: 4px;
+  margin-bottom: 4px;
+}
+
+/* ===== ラベル ===== */
+.tool-group label {
+  display: flex;
+  flex-direction: column;
+  font-size: 11px;
+  gap: 2px;
+}
+
+/* ===== スライダー ===== */
+.tool-group input[type="range"] {
+  width: 100%;
+}
+
+/* ===== ファイル入力 ===== */
+.tool-group input[type="file"] {
+  font-size: 11px;
+}
+
+/* ===== チェックボックス ===== */
+.tool-group input[type="checkbox"] {
+  transform: scale(1.1);
+}
+
+/* ===== ボタン ===== */
+.tool-group button {
+  background: #3b82f6;
+  border: none;
+  color: #fff;
+  border-radius: 6px;
+  padding: 6px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.tool-group button:hover {
+  background: #2563eb;
+}
+
+/* ===== 計測ボタン横並び ===== */
+.btn-row {
+  display: flex;
+  gap: 6px;
+}
+.btn-row button {
+  flex: 1;
+}
+
+/* ===== 計測結果 ===== */
+#measureResult {
+  font-size: 12px;
+  font-weight: bold;
+  text-align: center;
+  background: #020617;
+  padding: 6px;
+  border-radius: 6px;
+  margin-top: 4px;
+}
+
+/* ===== canvasを右に逃がす ===== */
+canvas {
+  margin-left: 260px;
+  background: #fff;
+  display: block;
+  cursor: default; /* 常に矢印 */
+}
+</style>
+</head>
+<body>
+
+<!-- 図面操作UI -->
+<div class="toolbar">
+
+  <!-- ===== ① A図面ゾーン ===== -->
+  <div class="tool-group">
+    <div class="tool-title">A図面</div>
+
+    <label>読込 <input type="file" id="imgA"></label>
+
+    <label>回転
+      <input type="range" id="rotA" min="0" max="360" value="0">
+    </label>
+
+    <label>
+      <input type="checkbox" id="flipAH"> 横反転
+    </label>
+    <label>
+      <input type="checkbox" id="flipAV"> 縦反転
+    </label>
+
+    <button id="scaleABtn">スケールA</button>
+  </div>
+
+  <!-- ===== ② B図面ゾーン ===== -->
+  <div class="tool-group">
+    <div class="tool-title">B図面</div>
+
+    <label>読込 <input type="file" id="imgB"></label>
+
+    <label>回転
+      <input type="range" id="rotB" min="0" max="360" value="0">
+    </label>
+
+    <label>
+      <input type="checkbox" id="flipBH"> 横反転
+    </label>
+    <label>
+      <input type="checkbox" id="flipBV"> 縦反転
+    </label>
+
+    <label>
+      <input type="checkbox" id="opaque"> 不透明
+    </label>
+
+    <button id="scaleBBtn">スケールB</button>
+  </div>
+
+  <!-- ===== ③ AB共通・計測ゾーン ===== -->
+  <div class="tool-group">
+    <div class="tool-title">共通・計測</div>
+
+    <label>表示ズーム
+      <input type="range" id="viewZoom" min="50" max="200" value="100">
+    </label>
+
+    <div class="btn-row">
+      <button id="modeDistance">距離</button>
+      <button id="modeAngle">角度</button>
+      <button id="modeArea">面積</button>
+      <button id="modeClear">解除</button>
+    </div>
+
+    <div id="measureResult">---</div>
+
+    <button id="deleteDim" style="margin-top:6px;">選択寸法削除</button>
+    <button id="exportPng" style="margin-top:6px;">PNG出力</button>
+  </div>
+
+</div>
+
+<canvas id="canvas" width="1500" height="900"></canvas>
+
+<script>
+// ============================
+// DOM取得
+// ============================
+const canvas      = document.getElementById("canvas");
+const ctx         = canvas.getContext("2d");
+
+const imgAInput   = document.getElementById("imgA");
+const imgBInput   = document.getElementById("imgB");
+const rotAInput   = document.getElementById("rotA");
+const rotBInput   = document.getElementById("rotB");
+const flipAHInput = document.getElementById("flipAH");
+const flipAVInput = document.getElementById("flipAV");
+const flipBHInput = document.getElementById("flipBH");
+const flipBVInput = document.getElementById("flipBV");
+
+const viewZoomInput = document.getElementById("viewZoom");
+const opaqueInput   = document.getElementById("opaque");
+
+const scaleABtn   = document.getElementById("scaleABtn");
+const scaleBBtn   = document.getElementById("scaleBBtn");
+
+const modeDistanceBtn = document.getElementById("modeDistance");
+const modeAngleBtn    = document.getElementById("modeAngle");
+const modeAreaBtn     = document.getElementById("modeArea");
+const modeClearBtn    = document.getElementById("modeClear");
+const deleteDimBtn    = document.getElementById("deleteDim");
+const exportPngBtn    = document.getElementById("exportPng");
+const resultBox       = document.getElementById("measureResult");
+
+// ============================
+// 状態
+// ============================
+let imgA = null;
+let imgB = null;
+
+// 図面のワールド座標上の状態
+const A = { x: 100, y: 100, rot: 0, flipH: false, flipV: false, scale: 1, crop: null };
+const B = { x: 400, y: 200, rot: 0, flipH: false, flipV: false, scale: 1, crop: null };
+
+// 実寸変換用：ワールド上 1mm あたりの px（スケール補正で決まる）
+let pxPerMm = null;
+
+// 表示専用ズーム／パン（ビュー変換）
+let viewZoom    = 1;
+let viewOffsetX = 0;
+let viewOffsetY = 0;
+
+// Bの透明度
+let alphaB = 0.6;
+
+// スケール補正モード
+let scaleMode   = null;   // "A" | "B" | null
+let scalePoints = [];
+
+// 計測モード
+let measureMode   = null; // "distance" | "angle" | "area" | null
+let measurePoints = [];
+
+// 計測プレビュー用（カーソル追従の仮点）
+let previewPoint  = null;
+
+// B図面ドラッグ
+let draggingB     = false;
+let dragOffsetBX  = 0;
+let dragOffsetBY  = 0;
+
+// A+B共通ドラッグ
+let draggingGroup = false;
+let groupOffA     = { x: 0, y: 0 };
+let groupOffB     = { x: 0, y: 0 };
+
+// 全体パン（余白ドラッグ）
+let panning       = false;
+let panStartScr   = { x: 0, y: 0 };
+let panStartOff   = { x: 0, y: 0 };
+
+// B図面切り取り
+let croppingB     = false;
+let cropStartPt   = null;
+
+// 寸法オブジェクト格納
+// type: "distance" | "angle" | "area"
+const dimensions = [];
+
+// 寸法選択＆ハンドルドラッグ
+let selectedDimIndex = -1;
+let draggingHandle   = null; // {dimIndex, kind, key/index}
+
+// ============================
+// ユーティリティ
+// ============================
+function loadImage(file, cb){
+  if(!file) return;
+  const img = new Image();
+  img.onload = () => cb(img);
+  img.src = URL.createObjectURL(file);
+}
+
+// 画面座標 → ワールド座標
+function screenToWorld(sx, sy){
+  return {
+    x: (sx - viewOffsetX) / viewZoom,
+    y: (sy - viewOffsetY) / viewZoom
+  };
+}
+
+// スケールが未設定なら警告
+function ensureScale(){
+  if(pxPerMm == null){
+    alert("先に「スケールA」または「スケールB」でスケール補正を行ってください。");
+    return false;
+  }
+  return true;
+}
+
+// スナップ（水平/垂直ロック：Shift 押下中）
+function snapToHV(base, p){
+  const dx = p.x - base.x;
+  const dy = p.y - base.y;
+  if(Math.abs(dx) >= Math.abs(dy)){
+    return { x: base.x + dx, y: base.y }; // 水平
+  }else{
+    return { x: base.x, y: base.y + dy }; // 垂直
+  }
+}
+
+// 図面ヒットテスト（回転・反転込み）
+function hitTestImage(img, obj, p){
+  if(!img) return false;
+
+  // ワールド → 図面ローカル座標系へ逆変換
+  let x = p.x - obj.x;
+  let y = p.y - obj.y;
+
+  const rad = -obj.rot * Math.PI / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  const rx = x * cos - y * sin;
+  const ry = x * sin + y * cos;
+  x = rx;
+  y = ry;
+
+  if(obj.flipH) x *= -1;
+  if(obj.flipV) y *= -1;
+
+  if(obj.crop){
+    const c = obj.crop;
+    return (0 <= x && x <= c.w && 0 <= y && y <= c.h);
+  }else{
+    const w = img.width  * obj.scale;
+    const h = img.height * obj.scale;
+    return (0 <= x && x <= w && 0 <= y && y <= h);
+  }
+}
+
+// 線分との距離²
+function segmentDist2(p, a, b){
+  const vx = b.x - a.x;
+  const vy = b.y - a.y;
+  const wx = p.x - a.x;
+  const wy = p.y - a.y;
+  const c1 = vx*wx + vy*wy;
+  if(c1 <= 0){
+    const dx = p.x - a.x;
+    const dy = p.y - a.y;
+    return dx*dx + dy*dy;
+  }
+  const c2 = vx*vx + vy*vy;
+  if(c2 <= c1){
+    const dx = p.x - b.x;
+    const dy = p.y - b.y;
+    return dx*dx + dy*dy;
+  }
+  const t = c1 / c2;
+  const projx = a.x + t*vx;
+  const projy = a.y + t*vy;
+  const dx = p.x - projx;
+  const dy = p.y - projy;
+  return dx*dx + dy*dy;
+}
+
+// 寸法のハンドル検索（端点ドラッグ用）
+function findDimensionHandle(p){
+  const threshold = 10;
+  const th2 = threshold * threshold;
+  let best = null;
+  let bestDist2 = th2;
+
+  for(let i = 0; i < dimensions.length; i++){
+    const d = dimensions[i];
+
+    if(d.type === "distance"){
+      [["p1", d.p1], ["p2", d.p2]].forEach(([key, pt]) => {
+        const dx = p.x - pt.x;
+        const dy = p.y - pt.y;
+        const dist2 = dx*dx + dy*dy;
+        if(dist2 < bestDist2){
+          bestDist2 = dist2;
+          best = { dimIndex: i, kind: "distance", key, index: null };
+        }
+      });
+    }else if(d.type === "angle"){
+      [["a", d.a], ["b", d.b], ["c", d.c]].forEach(([key, pt]) => {
+        const dx = p.x - pt.x;
+        const dy = p.y - pt.y;
+        const dist2 = dx*dx + dy*dy;
+        if(dist2 < bestDist2){
+          bestDist2 = dist2;
+          best = { dimIndex: i, kind: "angle", key, index: null };
+        }
+      });
+    }else if(d.type === "area" && Array.isArray(d.points)){
+      d.points.forEach((pt, idx) => {
+        const dx = p.x - pt.x;
+        const dy = p.y - pt.y;
+        const dist2 = dx*dx + dy*dy;
+        if(dist2 < bestDist2){
+          bestDist2 = dist2;
+          best = { dimIndex: i, kind: "area", key: null, index: idx };
+        }
+      });
+    }
+  }
+  return best;
+}
+
+// 寸法の線全体からの選択
+function findDimensionByShape(p){
+  const threshold = 10;
+  const th2 = threshold * threshold;
+  let bestIdx = -1;
+  let bestDist2 = th2;
+
+  for(let i = 0; i < dimensions.length; i++){
+    const d = dimensions[i];
+    let dist2 = Infinity;
+
+    if(d.type === "distance"){
+      dist2 = segmentDist2(p, d.p1, d.p2);
+    }else if(d.type === "angle"){
+      const d1 = segmentDist2(p, d.b, d.a);
+      const d2 = segmentDist2(p, d.b, d.c);
+      dist2 = Math.min(d1, d2);
+    }else if(d.type === "area" && Array.isArray(d.points) && d.points.length >= 2){
+      for(let j=0;j<d.points.length;j++){
+        const k = (j+1)%d.points.length;
+        const sDist2 = segmentDist2(p, d.points[j], d.points[k]);
+        if(sDist2 < dist2) dist2 = sDist2;
+      }
+    }
+
+    if(dist2 < bestDist2){
+      bestDist2 = dist2;
+      bestIdx   = i;
+    }
+  }
+  return bestIdx;
+}
+
+// ============================
+// ファイル読込
+// ============================
+imgAInput.onchange = e => loadImage(e.target.files[0], img => { imgA = img; });
+imgBInput.onchange = e => loadImage(e.target.files[0], img => { imgB = img; });
+
+// ============================
+// UIイベント
+// ============================
+rotAInput.oninput    = e => A.rot   = Number(e.target.value);
+rotBInput.oninput    = e => B.rot   = Number(e.target.value);
+flipAHInput.onchange = e => A.flipH = e.target.checked;
+flipAVInput.onchange = e => A.flipV = e.target.checked;
+flipBHInput.onchange = e => B.flipH = e.target.checked;
+flipBVInput.onchange = e => B.flipV = e.target.checked;
+
+viewZoomInput.oninput = e => {
+  viewZoom = Number(e.target.value) / 100;
+};
+
+opaqueInput.onchange = e => {
+  alphaB = e.target.checked ? 1 : 0.6;
+};
+
+// スケール補正ボタン
+scaleABtn.onclick = () => {
+  scaleMode   = "A";
+  scalePoints = [];
+  alert("図面Aのスケール補正：基準となる2点をクリックしてください（実寸が分かる辺など）。");
+};
+scaleBBtn.onclick = () => {
+  scaleMode   = "B";
+  scalePoints = [];
+  alert("図面Bのスケール補正：基準となる2点をクリックしてください。");
+};
+
+// 計測モード切替
+modeDistanceBtn.onclick = () => setMeasureMode("distance");
+modeAngleBtn.onclick    = () => setMeasureMode("angle");
+modeAreaBtn.onclick     = () => setMeasureMode("area");
+modeClearBtn.onclick    = () => setMeasureMode(null);
+
+function setMeasureMode(mode){
+  measureMode      = mode;
+  measurePoints    = [];
+  previewPoint     = null;
+  draggingHandle   = null;
+  selectedDimIndex = -1;
+  resultBox.textContent = mode ? mode + "モード" : "---";
+}
+
+// 選択寸法削除
+deleteDimBtn.onclick = () => {
+  if(selectedDimIndex >= 0 && selectedDimIndex < dimensions.length){
+    dimensions.splice(selectedDimIndex, 1);
+    selectedDimIndex = -1;
+    draggingHandle   = null;
+  }
+};
+
+// PNG出力
+exportPngBtn.onclick = () => {
+  const url = canvas.toDataURL("image/png");
+  const a   = document.createElement("a");
+  a.href = url;
+  a.download = "overlay.png";
+  a.click();
+};
+
+// キーボード（Esc, Deleteだけ）
+window.addEventListener("keydown", e => {
+  if(e.key === "Escape"){
+    measurePoints   = [];
+    previewPoint    = null;
+    draggingHandle  = null;
+    resultBox.textContent = "キャンセル";
+  }
+  if((e.key === "Delete" || e.key === "Backspace") && selectedDimIndex >= 0){
+    dimensions.splice(selectedDimIndex, 1);
+    selectedDimIndex = -1;
+    draggingHandle   = null;
+  }
+});
+
+// ============================
+// マウス操作
+// ============================
+
+// mousedown
+canvas.addEventListener("mousedown", e => {
+  const p0 = screenToWorld(e.offsetX, e.offsetY);
+
+  // スケール補正中・計測中は図面ドラッグ禁止（クリックだけ使う）
+  if(scaleMode || measureMode){
+    return;
+  }
+
+  // 寸法ハンドルを先にチェック（端点ドラッグ）
+  const handle = findDimensionHandle(p0);
+  if(handle){
+    selectedDimIndex = handle.dimIndex;
+    draggingHandle   = handle;
+    return;
+  }
+
+  // Shift + ドラッグでBの切り取り（計測中以外）
+  if(e.shiftKey){
+    croppingB   = true;
+    cropStartPt = p0;
+    return;
+  }
+
+  // 図面Bに当たっていたらBだけドラッグ
+  if(hitTestImage(imgB, B, p0)){
+    draggingB    = true;
+    dragOffsetBX = p0.x - B.x;
+    dragOffsetBY = p0.y - B.y;
+    return;
+  }
+
+  // 図面Aに当たっていたら A+B セットでドラッグ
+  if(hitTestImage(imgA, A, p0)){
+    draggingGroup = true;
+    groupOffA = { x: p0.x - A.x, y: p0.y - A.y };
+    groupOffB = { x: p0.x - B.x, y: p0.y - B.y };
+    return;
+  }
+
+  // どこにも当たっていなければ全体パン（余白ドラッグ）
+  panning = true;
+  panStartScr = { x: e.clientX, y: e.clientY };
+  panStartOff = { x: viewOffsetX, y: viewOffsetY };
+});
+
+// mousemove
+canvas.addEventListener("mousemove", e => {
+  const p0 = screenToWorld(e.offsetX, e.offsetY);
+
+  // パン
+  if(panning){
+    const dx = e.clientX - panStartScr.x;
+    const dy = e.clientY - panStartScr.y;
+    viewOffsetX = panStartOff.x + dx;
+    viewOffsetY = panStartOff.y + dy;
+    return;
+  }
+
+  // A+Bドラッグ
+  if(draggingGroup){
+    A.x = p0.x - groupOffA.x;
+    A.y = p0.y - groupOffA.y;
+    B.x = p0.x - groupOffB.x;
+    B.y = p0.y - groupOffB.y;
+    return;
+  }
+
+  // Bドラッグ
+  if(draggingB){
+    B.x = p0.x - dragOffsetBX;
+    B.y = p0.y - dragOffsetBY;
+    return;
+  }
+
+  // B切り取り中はここでは何もしない（矩形は描画していない簡易仕様）
+
+  // 寸法ハンドル編集中
+  if(draggingHandle){
+    const d = dimensions[draggingHandle.dimIndex];
+    if(!d) return;
+
+    const p = p0;
+
+    if(d.kind === "distance"){
+      if(draggingHandle.key === "p1") d.p1 = { ...p };
+      if(draggingHandle.key === "p2") d.p2 = { ...p };
+      if(pxPerMm){
+        const distPx = Math.hypot(d.p2.x - d.p1.x, d.p2.y - d.p1.y);
+        d.value = distPx / pxPerMm;
+        resultBox.textContent = `距離：${d.value.toFixed(0)} mm`;
+      }
+    }else if(d.kind === "angle"){
+      if(draggingHandle.key === "a") d.a = { ...p };
+      if(draggingHandle.key === "b") d.b = { ...p };
+      if(draggingHandle.key === "c") d.c = { ...p };
+
+      const v1 = { x: d.a.x - d.b.x, y: d.a.y - d.b.y };
+      const v2 = { x: d.c.x - d.b.x, y: d.c.y - d.b.y };
+      const dot = v1.x*v2.x + v1.y*v2.y;
+      const m1  = Math.hypot(v1.x, v1.y);
+      const m2  = Math.hypot(v2.x, v2.y);
+      const cos = Math.max(-1, Math.min(1, dot / (m1*m2 || 1)));
+      const rad = Math.acos(cos);
+      d.value   = rad * 180 / Math.PI;
+      resultBox.textContent = `角度：${d.value.toFixed(1)}°`;
+    }else if(d.kind === "area"){
+      if(Array.isArray(d.points) && draggingHandle.index != null){
+        d.points[draggingHandle.index] = { ...p };
+        if(pxPerMm){
+          let areaPx = 0;
+          for(let i=0;i<d.points.length;i++){
+            const j = (i+1)%d.points.length;
+            areaPx += d.points[i].x * d.points[j].y;
+            areaPx -= d.points[j].x * d.points[i].y;
+          }
+          areaPx = Math.abs(areaPx)/2;
+          const areaMm2 = areaPx / (pxPerMm*pxPerMm);
+          d.value = areaMm2 / 1_000_000;
+          resultBox.textContent = `面積：${d.value.toFixed(2)} ㎡`;
+        }
+      }
+    }
+    return;
+  }
+
+  // 計測モード時はリアルタイムプレビュー
+  if(!measureMode || measurePoints.length === 0) return;
+
+  let p = p0;
+  const last = measurePoints[measurePoints.length - 1];
+  if(e.shiftKey && last){          // ★ Shift で水平垂直ロック
+    p = snapToHV(last, p0);
+  }
+  previewPoint = p;
+
+  const tempPoints = [...measurePoints, p];
+
+  if(measureMode === "distance" && tempPoints.length >= 2){
+    const [p1, p2] = tempPoints;
+    const distPx = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+    const distMm = pxPerMm ? distPx / pxPerMm : 0;
+    resultBox.textContent = `距離：${distMm.toFixed(0)} mm`;
+  }
+
+  if(measureMode === "angle" && tempPoints.length >= 3){
+    const [Apt, Bpt, Cpt] = tempPoints.slice(-3);
+    const v1 = { x: Apt.x - Bpt.x, y: Apt.y - Bpt.y };
+    const v2 = { x: Cpt.x - Bpt.x, y: Cpt.y - Bpt.y };
+    const dot = v1.x*v2.x + v1.y*v2.y;
+    const m1  = Math.hypot(v1.x, v1.y);
+    const m2  = Math.hypot(v2.x, v2.y);
+    const cos = Math.max(-1, Math.min(1, dot / (m1*m2 || 1)));
+    const rad = Math.acos(cos);      // 常に 0〜π
+    const deg = rad * 180 / Math.PI;
+    resultBox.textContent = `角度：${deg.toFixed(1)}°`;
+  }
+
+  if(measureMode === "area" && tempPoints.length >= 3){
+    let areaPx = 0;
+    for(let i = 0; i < tempPoints.length; i++){
+      const j = (i + 1) % tempPoints.length;
+      areaPx += tempPoints[i].x * tempPoints[j].y;
+      areaPx -= tempPoints[j].x * tempPoints[i].y;
+    }
+    areaPx = Math.abs(areaPx) / 2;
+
+    const areaMm2 = pxPerMm ? areaPx / (pxPerMm * pxPerMm) : 0;
+    const areaM2  = areaMm2 / 1_000_000;
+    resultBox.textContent = `面積（仮）：${areaM2.toFixed(2)} ㎡`;
+  }
+});
+
+// mouseup
+canvas.addEventListener("mouseup", e => {
+  const p = screenToWorld(e.offsetX, e.offsetY);
+
+  // B切り取り確定
+  if(croppingB && cropStartPt){
+    croppingB = false;
+
+    const x1 = cropStartPt.x;
+    const y1 = cropStartPt.y;
+    const x2 = p.x;
+    const y2 = p.y;
+
+    const w  = Math.abs(x2 - x1);
+    const h  = Math.abs(y2 - y1);
+    const cx = Math.min(x1, x2) - B.x;
+    const cy = Math.min(y1, y2) - B.y;
+
+    B.crop = { x: cx, y: cy, w, h };
+    cropStartPt = null;
+  }
+
+  panning       = false;
+  draggingB     = false;
+  draggingGroup = false;
+  draggingHandle = null;
+});
+
+// click：スケール補正 + 計測 + 寸法選択
+canvas.addEventListener("click", e => {
+  const p0 = screenToWorld(e.offsetX, e.offsetY);
+
+  // スケール補正
+  if(scaleMode){
+    scalePoints.push(p0);
+
+    if(scalePoints.length === 2){
+      const [p1, p2] = scalePoints;
+      const dx = p2.x - p1.x;
+      const dy = p2.y - p1.y;
+      const distWorldPx = Math.hypot(dx, dy);
+
+      const realMm = parseFloat(prompt("この距離の実寸(mm)を入力してください："));
+      if(!realMm || realMm <= 0){
+        alert("数値が不正です。やり直してください。");
+        scaleMode   = null;
+        scalePoints = [];
+        return;
+      }
+
+      const currentPxPerMm = distWorldPx / realMm;
+
+      if(pxPerMm == null){
+        pxPerMm = currentPxPerMm;
+        alert(`基準スケール設定：1mm = ${pxPerMm.toFixed(4)} px`);
+      }else{
+        const factor = pxPerMm / currentPxPerMm;
+        if(scaleMode === "A"){
+          A.scale *= factor;
+        }else if(scaleMode === "B"){
+          B.scale *= factor;
+        }
+        alert(`図面${scaleMode}の縮尺を基準に合わせました（倍率：${factor.toFixed(3)}）。`);
+      }
+
+      scaleMode   = null;
+      scalePoints = [];
+    }
+    return;
+  }
+
+  // 計測モードでないとき → 寸法を線全体で選択
+  if(!measureMode){
+    const idx = findDimensionByShape(p0);
+    if(idx !== -1){
+      selectedDimIndex = idx;
+      draggingHandle   = null;
+    }else{
+      selectedDimIndex = -1;
+    }
+    return;
+  }
+
+  // 計測モード
+  let p = p0;
+  const last = measurePoints[measurePoints.length - 1];
+  if(e.shiftKey && last){
+    p = snapToHV(last, p0);
+  }
+
+  measurePoints.push(p);
+  previewPoint = null;
+
+  if(measureMode === "distance" && measurePoints.length === 2){
+    calcDistance();
+    measurePoints = [];
+  }else if(measureMode === "angle" && measurePoints.length === 3){
+    calcAngle();
+    measurePoints = [];
+  }
+});
+
+// 面積確定（ダブルクリック）
+canvas.addEventListener("dblclick", () => {
+  if(measureMode === "area" && measurePoints.length >= 3){
+    calcArea();
+    measurePoints = [];
+    previewPoint  = null;
+  }
+});
+
+// ============================
+// 計測計算（＋寸法オブジェクト登録）
+// ============================
+function calcDistance(){
+  if(!ensureScale()) return;
+  const [p1, p2] = measurePoints;
+  const distPx = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+  const distMm = distPx / pxPerMm;
+  resultBox.textContent = `距離：${distMm.toFixed(0)} mm`;
+
+  dimensions.push({
+    type: "distance",
+    p1: { ...p1 },
+    p2: { ...p2 },
+    value: distMm
+  });
+}
+
+function calcAngle(){
+  const [Apt, Bpt, Cpt] = measurePoints;
+  const v1 = { x: Apt.x - Bpt.x, y: Apt.y - Bpt.y };
+  const v2 = { x: Cpt.x - Bpt.x, y: Cpt.y - Bpt.y };
+  const dot = v1.x*v2.x + v1.y*v2.y;
+  const m1  = Math.hypot(v1.x, v1.y);
+  const m2  = Math.hypot(v2.x, v2.y);
+  const cos = Math.max(-1, Math.min(1, dot / (m1*m2 || 1)));
+  const rad = Math.acos(cos);      // 0〜π
+  const deg = rad * 180 / Math.PI;
+  resultBox.textContent = `角度：${deg.toFixed(1)}°`;
+
+  dimensions.push({
+    type: "angle",
+    a: { ...Apt },
+    b: { ...Bpt },
+    c: { ...Cpt },
+    value: deg
+  });
+}
+
+function calcArea(){
+  if(!ensureScale()) return;
+  let areaPx = 0;
+  for(let i = 0; i < measurePoints.length; i++){
+    const j = (i + 1) % measurePoints.length;
+    areaPx += measurePoints[i].x * measurePoints[j].y;
+    areaPx -= measurePoints[j].x * measurePoints[i].y;
+  }
+  areaPx = Math.abs(areaPx) / 2;
+
+  const areaMm2 = areaPx / (pxPerMm * pxPerMm);
+  const areaM2  = areaMm2 / 1_000_000;
+
+  resultBox.textContent = `面積：${areaM2.toFixed(2)} ㎡`;
+
+  dimensions.push({
+    type: "area",
+    points: measurePoints.map(p => ({ ...p })),
+    value: areaM2
+  });
+}
+
+// ============================
+// 図面描画（ワールド座標）
+// ============================
+function drawImageWorld(img, obj, alphaVal, useCrop){
+  if(!img) return;
+  ctx.save();
+
+  const s = obj.scale;
+
+  ctx.translate(obj.x, obj.y);
+  ctx.rotate(obj.rot * Math.PI / 180);
+  ctx.scale(obj.flipH ? -1 : 1, obj.flipV ? -1 : 1);
+  ctx.globalAlpha = alphaVal;
+
+  if(useCrop && obj.crop){
+    const c = obj.crop;
+    ctx.drawImage(
+      img,
+      c.x / s, c.y / s,
+      c.w / s, c.h / s,
+      0, 0,
+      c.w, c.h
+    );
+  }else{
+    ctx.drawImage(
+      img,
+      0, 0,
+      img.width  * s,
+      img.height * s
+    );
+  }
+
+  ctx.restore();
+}
+
+// 計測ガイド（現在の測定中ライン＋カーソル追従）
+function drawMeasureGuide(){
+  if(!measureMode || measurePoints.length < 1) return;
+
+  const pts = [...measurePoints];
+  if(previewPoint){
+    pts.push(previewPoint);
+  }
+
+  ctx.save();
+  ctx.strokeStyle = "red";
+  ctx.lineWidth   = 2;
+  ctx.beginPath();
+  ctx.moveTo(pts[0].x, pts[0].y);
+  for(let i = 1; i < pts.length; i++){
+    ctx.lineTo(pts[i].x, pts[i].y);
+  }
+  if(measureMode === "area" && pts.length > 2){
+    ctx.lineTo(pts[0].x, pts[0].y);
+  }
+  ctx.stroke();
+  ctx.restore();
+}
+
+// 寸法オブジェクト描画
+function drawDimensions(){
+  try{
+    ctx.save();
+    ctx.font = "12px system-ui";
+    ctx.lineWidth = 1.5;
+
+    for(let i=0;i<dimensions.length;i++){
+      const d = dimensions[i];
+      const isSel = (i === selectedDimIndex);
+
+      ctx.strokeStyle = isSel ? "orange" : "blue";
+      ctx.fillStyle   = isSel ? "orange" : "blue";
+
+      if(d.type === "distance"){
+        const { p1, p2, value } = d;
+        ctx.beginPath();
+        ctx.moveTo(p1.x, p1.y);
+        ctx.lineTo(p2.x, p2.y);
+        ctx.stroke();
+
+        const dx = p2.x - p1.x;
+        const dy = p2.y - p1.y;
+        const len = Math.hypot(dx, dy) || 1;
+        const nx = -dy / len;
+        const ny =  dx / len;
+        const tick = 4;
+        ctx.beginPath();
+        ctx.moveTo(p1.x - nx*tick, p1.y - ny*tick);
+        ctx.lineTo(p1.x + nx*tick, p1.y + ny*tick);
+        ctx.moveTo(p2.x - nx*tick, p2.y - ny*tick);
+        ctx.lineTo(p2.x + nx*tick, p2.y + ny*tick);
+        ctx.stroke();
+
+        const mx = (p1.x + p2.x) / 2;
+        const my = (p1.y + p2.y) / 2;
+        ctx.fillText(`${value.toFixed(0)} mm`, mx + 4, my - 4);
+      }
+
+      if(d.type === "angle"){
+        const { a, b, c, value } = d;
+
+        ctx.beginPath();
+        ctx.moveTo(b.x, b.y);
+        ctx.lineTo(a.x, a.y);
+        ctx.moveTo(b.x, b.y);
+        ctx.lineTo(c.x, c.y);
+        ctx.stroke();
+
+        const r = 20;
+        const v1 = { x: a.x - b.x, y: a.y - b.y };
+        const v2 = { x: c.x - b.x, y: c.y - b.y };
+        let t1 = Math.atan2(v1.y, v1.x);
+        let t2 = Math.atan2(v2.y, v2.x);
+        let diff = t2 - t1;
+        while(diff <= -Math.PI) diff += 2*Math.PI;
+        while(diff >  Math.PI) diff -= 2*Math.PI;
+        const endAngle      = t1 + diff;
+        const anticlockwise = diff < 0;
+
+        ctx.beginPath();
+        ctx.arc(b.x, b.y, r, t1, endAngle, anticlockwise);
+        ctx.stroke();
+
+        ctx.fillText(`${value.toFixed(1)}°`, b.x + r + 4, b.y);
+      }
+
+      if(d.type === "area"){
+        const { points, value } = d;
+        if(!points || points.length < 3) continue;
+
+        ctx.beginPath();
+        ctx.moveTo(points[0].x, points[0].y);
+        for(let j=1;j<points.length;j++){
+          ctx.lineTo(points[j].x, points[j].y);
+        }
+        ctx.closePath();
+        ctx.globalAlpha = 0.1;
+        ctx.fill();
+        ctx.globalAlpha = 1;
+        ctx.stroke();
+
+        let cx = 0, cy = 0;
+        for(const p of points){
+          cx += p.x;
+          cy += p.y;
+        }
+        cx /= points.length;
+        cy /= points.length;
+        ctx.fillText(`${value.toFixed(2)} ㎡`, cx + 4, cy - 4);
+      }
+    }
+
+    ctx.restore();
+  }catch(err){
+    console.error("drawDimensions error:", err);
+  }
+}
+
+// ============================
+// メインループ
+// ============================
+function loop(){
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  ctx.setTransform(
+    viewZoom, 0,
+    0, viewZoom,
+    viewOffsetX, viewOffsetY
+  );
+
+  if(imgA) drawImageWorld(imgA, A, 1, false);
+  if(imgB) drawImageWorld(imgB, B, alphaB, true);
+
+  drawDimensions();
+  drawMeasureGuide();
+
+  requestAnimationFrame(loop);
+}
+loop();
+</script>
+</body>
+</html>
