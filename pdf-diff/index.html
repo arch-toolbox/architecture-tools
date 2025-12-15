@@ -1,1 +1,52 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>PDF図面 管理画面</title>
+
+  <!-- ✅ CDN -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.0/Sortable.min.js"></script>
+
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <h1>PDF図面 管理画面</h1>
+
+  <h2>新図面 PDF 読み込み（A案）</h2>
+  <input type="file" id="pdfInputA" multiple accept="application/pdf">
+
+  <h2>旧図面 PDF 読み込み（B案）</h2>
+  <input type="file" id="pdfInputB" multiple accept="application/pdf">
+
+  <!-- ✅ サムネ一覧 -->
+  <div id="pageList"></div>
+  <hr>
+
+<div id="compareArea" style="display:none;">
+  <div style="margin:8px 0;">
+    <button id="prevBtn">← 前へ</button>
+    <button id="nextBtn">次へ →</button>
+    <span id="pageInfo" style="margin-left:12px;"></span>
+    <button id="backBtn" style="margin-left:12px;">管理画面に戻る</button>
+    <button id="rotL">↺ 回転 -</button>
+    <button id="rotR">↻ 回転 +</button>
+    <button id="togglePerPage">このページだけ調整：OFF</button>
+    <button id="applyToAll">今の調整を全ページに適用</button>
+    <button id="resetPage">このページの調整リセット</button>
+
+  </div>
+  <canvas id="canvas" style="border:1px solid #aaa; max-width:100%;"></canvas>
+</div>
+
+
+  <button id="startCompare" style="margin-top:20px; padding:10px 20px; font-size:16px;">
+  この並びで差分比較へ
+</button>
+
+
+  <script src="app.js"></script>
+</body>
+</html>
 
