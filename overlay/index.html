@@ -190,7 +190,8 @@ canvas {
 
 </div>
 
-<canvas id="canvas" width="1500" height="900"></canvas>
+<canvas id="canvas" width="1500" height="900" tabindex="0"></canvas>
+
 
 <script>
 // ============================
@@ -198,6 +199,16 @@ canvas {
 // ============================
 const canvas      = document.getElementById("canvas");
 const ctx         = canvas.getContext("2d");
+
+  // キャンバスをクリックしたらフォーカス（キー操作をキャンバスに寄せる）
+canvas.addEventListener("mousedown", () => canvas.focus());
+
+// 矢印キーでページがスクロールするのを止める（必要なキーだけ）
+window.addEventListener("keydown", (e) => {
+  const keys = ["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"," "];
+  if (keys.includes(e.key)) e.preventDefault();
+}, { passive: false });
+
 
 const imgAInput   = document.getElementById("imgA");
 const imgBInput   = document.getElementById("imgB");
